@@ -131,8 +131,15 @@ func (c *Client) registerGroupKey(chat string) error {
 	}
 	// LINE may omit the caller from MemberMids. Add it explicitly, but reject
 	// empty/self-only maps: the CLI has no other source for membership.
+	// Exception: when the server reports membership of exactly {self} and no
+	// pending invitees, a self-only key excludes nobody, so it is complete.
 	if len(members) == 0 {
-		return errors.New("complete group membership unavailable; cannot register a group key")
+		soloSelf := len(group.MemberMids) == 1 &&
+			group.MemberMids[c.state.MID] &&
+			len(group.InviteeMids) == 0
+		if !soloSelf {
+			return errors.New("complete group membership unavailable; cannot register a group key")
+		}
 	}
 	sort.Strings(members)
 	keyIDs := make([]int, 0, len(members)+1)
