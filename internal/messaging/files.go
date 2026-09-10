@@ -115,13 +115,29 @@ func (c *Client) DownloadFile(ctx context.Context, chat, id string) ([]byte, err
 	if err != nil {
 		return nil, err
 	}
-	if msg.ContentType != 14 {
-		return nil, errors.New("download currently supports generic file attachments only")
+	// 14=file, 1=image. The OBS path below is already media-aware (it honours
+	// MEDIA_CONTENT_INFO category "original" to fetch full resolution, not a thumbnail),
+	// so the only thing limiting this to files was this gate. Video is deliberately not
+	// enabled: its OBS sid is unverified.
+	switch msg.ContentType {
+	case 1, 14:
+	default:
+		return nil, errors.New("download supports file and image attachments only")
 	}
 	if n, err := strconv.ParseInt(msg.ContentMetadata["FILE_SIZE"], 10, 64); err == nil && (n < 0 || n > MaxAttachmentBytes) {
 		return nil, errors.New("attachment exceeds the CLI limit of 20 MiB")
 	}
-	oid, sid, talkMeta := msg.ContentMetadata["OID"], "emf", msg.ID
+	// Encrypted media is keyed by sid: "emf" for files, "emi" for images. Using "emf" for an
+	// image makes OBS reject the request, which do() then masks as "token refresh failed".
+	// The sender stores the true sid on the message, so prefer it over any assumption.
+	sid := msg.ContentMetadata["SID"]
+	if sid == "" {
+		sid = "emf"
+		if msg.ContentType == 1 {
+			sid = "emi"
+		}
+	}
+	oid, talkMeta := msg.ContentMetadata["OID"], msg.ID
 	var key string
 	if oid == "" {
 		if len(msg.Chunks) > 0 || msg.ContentMetadata["e2eeVersion"] != "" {

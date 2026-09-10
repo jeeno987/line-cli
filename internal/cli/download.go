@@ -120,7 +120,19 @@ func (a *App) downloadCommand(args []string) error {
 	// Same-directory linking atomically publishes the complete file and fails
 	// if another process created the destination while the download was running.
 	if err = os.Link(f.Name(), *output); err != nil {
-		return fmt.Errorf("save downloaded file without overwriting: %w", err)
+		// Android app storage (and proot) deny hardlinks outright. O_EXCL keeps the same
+		// "never clobber an existing destination" guarantee without needing link().
+		out, openErr := os.OpenFile(*output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if openErr != nil {
+			return fmt.Errorf("save downloaded file without overwriting: %w", err)
+		}
+		if _, writeErr := out.Write(data); writeErr != nil {
+			out.Close()
+			return fmt.Errorf("save downloaded file: %w", writeErr)
+		}
+		if closeErr := out.Close(); closeErr != nil {
+			return fmt.Errorf("save downloaded file: %w", closeErr)
+		}
 	}
 	if *jsonOutput {
 		return a.json(struct {
