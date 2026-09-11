@@ -10,7 +10,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -23,6 +25,25 @@ import (
 )
 
 const MaxAttachmentBytes = 20 << 20
+
+// Downloading is capped separately from sending. 20 MiB is a sane guard on what we upload, but as
+// a receive limit it silently drops real attachments an archiver is meant to keep. The ceiling
+// still exists because the whole object is decrypted in memory; LINE_MAX_DOWNLOAD_BYTES raises or
+// lowers it for callers who know their own memory budget.
+const defaultMaxDownloadBytes = 100 << 20
+
+func maxDownloadBytes() int64 {
+	if v := os.Getenv("LINE_MAX_DOWNLOAD_BYTES"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxDownloadBytes
+}
+
+func downloadTooLargeError(limit int64) error {
+	return fmt.Errorf("attachment exceeds the CLI download limit of %d MiB", limit>>20)
+}
 
 type Attachment struct {
 	Name string
@@ -124,8 +145,9 @@ func (c *Client) DownloadFile(ctx context.Context, chat, id string) ([]byte, err
 	default:
 		return nil, errors.New("download supports file and image attachments only")
 	}
-	if n, err := strconv.ParseInt(msg.ContentMetadata["FILE_SIZE"], 10, 64); err == nil && (n < 0 || n > MaxAttachmentBytes) {
-		return nil, errors.New("attachment exceeds the CLI limit of 20 MiB")
+	limit := maxDownloadBytes()
+	if n, err := strconv.ParseInt(msg.ContentMetadata["FILE_SIZE"], 10, 64); err == nil && (n < 0 || n > limit) {
+		return nil, downloadTooLargeError(limit)
 	}
 	// Encrypted media is keyed by sid: "emf" for files, "emi" for images. Using "emf" for an
 	// image makes OBS reject the request, which do() then masks as "token refresh failed".
@@ -157,7 +179,7 @@ func (c *Client) DownloadFile(ctx context.Context, chat, id string) ([]byte, err
 		}
 		key = body.Key
 	}
-	opts := line.OBSDownloadOptions{OBSPop: msg.ContentMetadata["OBS_POP"], MaxBytes: MaxAttachmentBytes + sha256.Size}
+	opts := line.OBSDownloadOptions{OBSPop: msg.ContentMetadata["OBS_POP"], MaxBytes: limit + sha256.Size}
 	if sid == "m" {
 		var info struct {
 			Category string `json:"category"`
@@ -173,8 +195,8 @@ func (c *Client) DownloadFile(ctx context.Context, chat, id string) ([]byte, err
 	}); err != nil {
 		return nil, err
 	}
-	if len(data) > MaxAttachmentBytes+sha256.Size {
-		return nil, errors.New("attachment exceeds the CLI limit of 20 MiB")
+	if int64(len(data)) > limit+sha256.Size {
+		return nil, downloadTooLargeError(limit)
 	}
 	if key != "" {
 		data, err = decryptFile(data, key)
@@ -182,8 +204,8 @@ func (c *Client) DownloadFile(ctx context.Context, chat, id string) ([]byte, err
 			return nil, err
 		}
 	}
-	if len(data) > MaxAttachmentBytes {
-		return nil, errors.New("attachment exceeds the CLI limit of 20 MiB")
+	if int64(len(data)) > limit {
+		return nil, downloadTooLargeError(limit)
 	}
 	return data, nil
 }

@@ -146,7 +146,7 @@ func TestFileDownloadAuthenticatesAndUsesCorrectOBSContract(t *testing.T) {
 		if err != nil || string(data) != "file data" {
 			t.Fatal("download failed", err)
 		}
-		if api.options.MaxBytes != MaxAttachmentBytes+32 {
+		if api.options.MaxBytes != defaultMaxDownloadBytes+32 {
 			t.Fatal("download was not bounded")
 		}
 		if encrypted {
@@ -185,5 +185,21 @@ func TestAttachmentValidationAndMAC(t *testing.T) {
 	}
 	if _, err := decryptFile([]byte("short"), key); err == nil {
 		t.Fatal("truncated file accepted")
+	}
+}
+
+func TestMaxDownloadBytesHonoursEnvOverride(t *testing.T) {
+	if got := maxDownloadBytes(); got != defaultMaxDownloadBytes {
+		t.Fatalf("default download limit = %d, want %d", got, defaultMaxDownloadBytes)
+	}
+	for _, bad := range []string{"", "0", "-5", "not-a-number"} {
+		t.Setenv("LINE_MAX_DOWNLOAD_BYTES", bad)
+		if got := maxDownloadBytes(); got != defaultMaxDownloadBytes {
+			t.Fatalf("LINE_MAX_DOWNLOAD_BYTES=%q gave %d, want the default %d", bad, got, defaultMaxDownloadBytes)
+		}
+	}
+	t.Setenv("LINE_MAX_DOWNLOAD_BYTES", "1048576")
+	if got := maxDownloadBytes(); got != 1<<20 {
+		t.Fatalf("override gave %d, want %d", got, 1<<20)
 	}
 }
